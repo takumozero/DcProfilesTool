@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="DcProfilesTool.vcxproj" Id="29dc4c05-9585-411a-b1fc-9891f56b0db3" />
+</Solution>
