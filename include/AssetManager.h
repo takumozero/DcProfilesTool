@@ -78,6 +78,12 @@ private:
         const std::filesystem::path& output
     );
 
+    void compressJpegLossy(
+        const std::filesystem::path& input,
+        const std::filesystem::path& output,
+        int quality
+    );
+
     void optimizeGif(
         const std::filesystem::path& input,
         const std::filesystem::path& output

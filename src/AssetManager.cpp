@@ -7,9 +7,11 @@
 #include <algorithm>
 #include <cctype>
 #include <vector>
+#include <array>
 #include <sstream>
 #include <cmath>
 #include <iomanip>
+#include <system_error>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1386,6 +1388,53 @@ void AssetManager::processImage(
         );
     }
 
+    if (extension == ".jpg" || extension == ".jpeg")
+    {
+        const auto temporaryOutput =
+            destination.parent_path() /
+            (destination.stem().string() + "_compressed" + destination.extension().string());
+
+        // Lower q:v values retain more JPEG detail. Try those first.
+        constexpr std::array<int, 8> qualityLevels = { 2, 4, 6, 9, 13, 18, 24, 31 };
+
+        try
+        {
+            for (const int quality : qualityLevels)
+            {
+                std::filesystem::remove(temporaryOutput);
+                compressJpegLossy(source, temporaryOutput, quality);
+
+                if (getFileSize(temporaryOutput) <= maximumSize)
+                {
+                    std::filesystem::copy_file(
+                        temporaryOutput,
+                        destination,
+                        std::filesystem::copy_options::overwrite_existing
+                    );
+                    std::filesystem::remove(temporaryOutput);
+                    return;
+                }
+            }
+
+            const auto finalSize = getFileSize(temporaryOutput);
+            throw std::runtime_error(
+                "The " + assetType +
+                " is still too large after JPEG compression.\n"
+                "Compressed size: " +
+                std::to_string(static_cast<double>(finalSize) / (1024.0 * 1024.0)) +
+                " MiB\nMaximum size: " +
+                std::to_string(static_cast<double>(maximumSize) / (1024.0 * 1024.0)) +
+                " MiB"
+            );
+        }
+        catch (...)
+        {
+            std::error_code error;
+            std::filesystem::remove(temporaryOutput, error);
+            throw;
+        }
+    }
+
     /*
      * -----------------------------------------
      * Non-GIF images
@@ -1499,22 +1548,6 @@ void AssetManager::compressLossless(
 
     const auto extension =
         getExtension(input);
-
-    /*
-     * JPEG cannot be compressed losslessly.
-     *
-     * GIF is intentionally not handled here.
-     * GIF files are optimized separately using Gifsicle.
-     */
-    if (extension == ".jpg" ||
-        extension == ".jpeg")
-    {
-        throw std::runtime_error(
-            "JPEG images cannot be reduced "
-            "losslessly. The image exceeds "
-            "the allowed size."
-        );
-    }
 
     if (extension == ".gif")
     {
@@ -1680,6 +1713,62 @@ void AssetManager::compressLossless(
         "FFmpeg asset processing is currently "
         "only implemented on Windows."
     );
+
+#endif
+}
+
+void AssetManager::compressJpegLossy(
+    const std::filesystem::path& input,
+    const std::filesystem::path& output,
+    int quality)
+{
+#ifdef _WIN32
+
+    if (quality < 2 || quality > 31)
+    {
+        throw std::runtime_error("Invalid JPEG quality value: " + std::to_string(quality));
+    }
+
+    const auto ffmpeg = ensureFfmpeg();
+
+    const std::wstring commandLine =
+        quoteWindowsArgument(ffmpeg.wstring()) +
+        L" -y -i " + quoteWindowsArgument(input.wstring()) +
+        L" -c:v mjpeg -q:v " + std::to_wstring(quality) +
+        L" -frames:v 1 " + quoteWindowsArgument(output.wstring());
+
+    std::vector<wchar_t> commandBuffer(commandLine.begin(), commandLine.end());
+    commandBuffer.push_back(L'\0');
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+
+    PROCESS_INFORMATION processInfo{};
+    if (!CreateProcessW(nullptr, commandBuffer.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW, nullptr, nullptr, &startupInfo, &processInfo))
+    {
+        throw std::runtime_error(
+            "Failed to start FFmpeg. Windows error code: " + std::to_string(GetLastError())
+        );
+    }
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+
+    DWORD exitCode = 0;
+    GetExitCodeProcess(processInfo.hProcess, &exitCode);
+    CloseHandle(processInfo.hProcess);
+    CloseHandle(processInfo.hThread);
+
+    if (exitCode != 0)
+    {
+        throw std::runtime_error(
+            "FFmpeg failed while compressing JPEG. Exit code: " + std::to_string(exitCode)
+        );
+    }
+
+#else
+
+    throw std::runtime_error("JPEG compression is currently only implemented on Windows.");
 
 #endif
 }
